@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Video Call</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <!-- Initial state: Local video is full screen, Remote is floating -->
+        <video id="localVideo" class="full-screen" autoplay muted playsinline></video>
+        <video id="remoteVideo" class="floating" autoplay playsinline></video>
+    </div>
+    <div class="controls">
+        <button id="muteMic" class="control-btn" title="Mute/Unmute">
+            <span class="material-icons">mic</span>
+        </button>
+        <button id="callAction" class="control-btn call-start" title="Start Call">
+            <span class="material-icons">call</span>
+        </button>
+        <button id="toggleVideo" class="control-btn" title="Turn Camera On/Off">
+            <span class="material-icons">videocam</span>
+        </button>
+    </div>
+    <div id="logs"></div>
+    <script>
+        window.onerror = function (msg, url, lineNo, columnNo, error) {
+            // const logsDiv = document.getElementById('logs');
+            // if (logsDiv) {
+            //     logsDiv.innerHTML += '<div style="color:red; background: #ffe;">Global Error: ' + msg + ' at line ' + lineNo + '</div>';
+            // }
+            console.error('Global Error: ' + msg);
+            return false;
+        };
+        console.log('Global error handler installed');
+
+        // Check if script.js loads
+        setTimeout(() => {
+            if (typeof startCallButton === 'undefined') {
+                const logsDiv = document.getElementById('logs');
+                if (logsDiv) logsDiv.innerHTML += '<div style="color:orange;">Warning: script.js seems not to have loaded after 2 seconds.</div>';
+            }
+        }, 2000);
+    </script>
+    <script src="script.js?v=2"></script>
+</body>
+
+</html>
