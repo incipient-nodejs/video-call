@@ -12,6 +12,36 @@ let peerConnection;
 let inCall = false;
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const ws = new WebSocket(`${protocol}//${window.location.host}`);
+let currentRoomId = null;
+
+const roomInput = document.getElementById('roomInput');
+const joinRoomButton = document.getElementById('joinRoom');
+const roomDisplay = document.getElementById('roomDisplay');
+
+joinRoomButton.onclick = () => {
+    const roomId = roomInput.value.trim();
+    if (roomId) {
+        joinRoom(roomId);
+    }
+};
+
+function joinRoom(roomId) {
+    currentRoomId = roomId;
+    roomDisplay.textContent = `Room: ${roomId}`;
+    ws.send(JSON.stringify({ type: 'join', roomId: roomId }));
+    console.log(`Joined room: ${roomId}`);
+    window.location.hash = roomId;
+}
+
+// Auto-join if room ID is in hash
+window.addEventListener('load', () => {
+    const hashRoom = window.location.hash.substring(1);
+    if (hashRoom) {
+        roomInput.value = hashRoom;
+        // Wait a bit for WS to connect
+        setTimeout(() => joinRoom(hashRoom), 500);
+    }
+});
 
 const configuration = {
     iceServers: [
@@ -167,7 +197,11 @@ async function startCall() {
         offer.sdp = setVideoBitrate(offer.sdp, 2500);
         
         await peerConnection.setLocalDescription(offer);
-        ws.send(JSON.stringify({ type: 'offer', offer: offer }));
+        ws.send(JSON.stringify({ 
+            type: 'offer', 
+            offer: offer, 
+            roomId: currentRoomId 
+        }));
     }
 }
 
@@ -207,7 +241,11 @@ async function handleOffer(offer) {
     answer.sdp = setVideoBitrate(answer.sdp, 2500);
     
     await peerConnection.setLocalDescription(answer);
-    ws.send(JSON.stringify({ type: 'answer', answer: answer }));
+    ws.send(JSON.stringify({ 
+        type: 'answer', 
+        answer: answer,
+        roomId: currentRoomId 
+    }));
 }
 
 function handleAnswer(answer) {
@@ -251,7 +289,11 @@ function createPeerConnection() {
 
     peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
-            ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+            ws.send(JSON.stringify({ 
+                type: 'candidate', 
+                candidate: event.candidate,
+                roomId: currentRoomId 
+            }));
         }
     };
 }

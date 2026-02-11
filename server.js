@@ -19,11 +19,26 @@ app.get("/", (req, res) => {
 
 wss.on("connection", (ws) => {
   ws.on("message", (message) => {
-    // Broadcast the message to all clients except the sender
-    // Ensure we convert Buffer to String so clients receive text, not Blobs
+    let data;
+    try {
+      data = JSON.parse(message);
+    } catch (e) {
+      console.error("Invalid JSON:", message.toString());
+      return;
+    }
+
+    if (data.type === 'join') {
+      ws.roomId = data.roomId;
+      console.log(`User joined room: ${ws.roomId}`);
+      return;
+    }
+
+    // Broadcast the message to all clients in the SAME room except the sender
     const messageString = message.toString();
     wss.clients.forEach((client) => {
-      if (client !== ws && client.readyState === WebSocket.OPEN) {
+      if (client !== ws && 
+          client.readyState === WebSocket.OPEN && 
+          client.roomId === ws.roomId) {
         client.send(messageString);
       }
     });
