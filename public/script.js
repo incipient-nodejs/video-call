@@ -1,156 +1,251 @@
 const localVideo = document.getElementById('localVideo');
-const remoteVideo = document.getElementById('remoteVideo');
+const videoGrid = document.getElementById('videoGrid');
 const callActionButton = document.getElementById('callAction');
-const logsDiv = document.getElementById('logs');
-
-function log(message) {
-    // console.log(message);
-}
 
 let localStream;
-let peerConnection;
 let inCall = false;
+let currentRoomId = null;
+const peers = {}; // peerId -> RTCPeerConnection
+const candidateQueues = {}; // peerId -> [candidates]
+const peerNames = {}; // peerId -> username
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const ws = new WebSocket(`${protocol}//${window.location.host}`);
-let currentRoomId = null;
 
 const roomInput = document.getElementById('roomInput');
+const nameInput = document.getElementById('nameInput');
 const joinRoomButton = document.getElementById('joinRoom');
 const roomDisplay = document.getElementById('roomDisplay');
 
-joinRoomButton.onclick = () => {
-    const roomId = roomInput.value.trim();
-    if (roomId) {
-        joinRoom(roomId);
-    }
+const configuration = {
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 };
 
-function joinRoom(roomId) {
+joinRoomButton.onclick = () => {
+    const roomId = roomInput.value.trim();
+    const username = nameInput.value.trim();
+    if (roomId) joinRoom(roomId, username);
+};
+
+function joinRoom(roomId, username) {
     currentRoomId = roomId;
     roomDisplay.textContent = `Room: ${roomId}`;
-    ws.send(JSON.stringify({ type: 'join', roomId: roomId }));
-    console.log(`Joined room: ${roomId}`);
+    ws.send(JSON.stringify({ 
+        type: 'join', 
+        roomId: roomId, 
+        username: username || 'Anonymous' 
+    }));
     window.location.hash = roomId;
 }
 
-// Auto-join if room ID is in hash
 window.addEventListener('load', () => {
     const hashRoom = window.location.hash.substring(1);
     if (hashRoom) {
         roomInput.value = hashRoom;
-        // Wait a bit for WS to connect
         setTimeout(() => joinRoom(hashRoom), 500);
     }
 });
 
-const configuration = {
-    iceServers: [
-        {
-            urls: 'stun:stun.l.google.com:19302'
-        }
-    ]
-};
-
-ws.onopen = () => {
-    console.log('WebSocket Connected');
-};
-
-ws.onclose = () => {
-    console.log('WebSocket Closed');
-};
-
-ws.onerror = (error) => {
-    console.error('WebSocket Error:', error);
-};
-
-ws.onmessage = (event) => {
+ws.onmessage = async (event) => {
     const data = JSON.parse(event.data);
-    console.log('Received Signal:', data.type);
+    const peerId = data.fromId || data.peerId;
+    console.log(`Received ${data.type} from ${peerId}`, data);
 
     switch(data.type) {
+        case 'room-users':
+            console.log(`Existing users in room:`, data.peers);
+            data.peers.forEach(peer => {
+                peerNames[peer.id] = peer.username;
+                // We DON'T call existing users here. 
+                // We wait for them to call us or for us to send a 'user-joined' signal.
+            });
+            break;
+        case 'user-joined':
+            console.log(`User ${data.username} (${data.peerId}) joined. My inCall status: ${inCall}`);
+            peerNames[data.peerId] = data.username;
+            if (inCall) {
+                console.log(`I am in call, initiating call to the new user: ${data.peerId}`);
+                initiateCall(data.peerId);
+            }
+            break;
         case 'offer':
-            handleOffer(data.offer);
+            console.log(`Handling offer from ${peerId}`);
+            handleOffer(peerId, data.offer);
             break;
         case 'answer':
-            handleAnswer(data.answer);
+            console.log(`Handling answer from ${peerId}`);
+            handleAnswer(peerId, data.answer);
             break;
         case 'candidate':
-            handleCandidate(data.candidate);
+            console.log(`Handling candidate from ${peerId}`);
+            handleCandidate(peerId, data.candidate);
             break;
-        default:
+        case 'user-left':
+            console.log(`User ${peerId} left the room`);
+            removePeer(peerId);
             break;
     }
 };
-
-const candidateQueue = [];
-
-function swapVideoClasses() {
-    const localClasses = localVideo.className;
-    const remoteClasses = remoteVideo.className;
-
-    localVideo.className = remoteClasses;
-    remoteVideo.className = localClasses;
-}
-
-localVideo.onclick = swapVideoClasses;
-remoteVideo.onclick = swapVideoClasses;
 
 async function playVideoFromCamera() {
     try {
-        const constraints = {
-            video: {
-                width: { ideal: 1920, max: 1920 },
-                height: { ideal: 1080, max: 1080 },
-                frameRate: { ideal: 30, max: 60 },
-                facingMode: 'user'
-            },
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true
-            }
-        };
+        const constraints = { video: { width: 1280, height: 720 }, audio: true };
         localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        
-        // Boost quality hints
-        localStream.getVideoTracks().forEach(track => {
-            if ('contentHint' in track) track.contentHint = 'motion';
-        });
-
         localVideo.srcObject = localStream;
         return true;
-    } catch (error) {
-        console.error('Error accessing camera (1080p).', error);
-        try {
-             // Fallback to 720p
-             localStream = await navigator.mediaDevices.getUserMedia({ 
-                video: { width: 1280, height: 720 }, 
-                audio: true 
-             });
-             localVideo.srcObject = localStream;
-             return true;
-        } catch (fallbackError) {
-            console.error('Error in fallback.', fallbackError);
-            return false;
+    } catch (e) {
+        console.error('Camera access failed', e);
+        return false;
+    }
+}
+
+callActionButton.onclick = async () => {
+    if (!inCall) {
+        if (await playVideoFromCamera()) {
+            inCall = true;
+            updateActionButtonUI(true);
+            // In Mesh, we wait for others to join OR we can signal current room state
+            ws.send(JSON.stringify({ type: 'join', roomId: currentRoomId })); 
+        }
+    } else {
+        hangUp();
+    }
+};
+
+async function initiateCall(peerId) {
+    console.log(`initiateCall() to ${peerId}`);
+    const pc = await createPeerConnection(peerId);
+    if (!pc) return;
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type: 'offer', offer, targetId: peerId }));
+}
+
+async function handleOffer(peerId, offer) {
+    console.log(`handleOffer() from ${peerId}`);
+    const pc = await createPeerConnection(peerId);
+    if (!pc) return;
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    processCandidateQueue(peerId);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    ws.send(JSON.stringify({ type: 'answer', answer, targetId: peerId }));
+}
+
+function handleAnswer(peerId, answer) {
+    const pc = peers[peerId];
+    if (pc) {
+        pc.setRemoteDescription(new RTCSessionDescription(answer)).then(() => {
+            processCandidateQueue(peerId);
+        });
+    }
+}
+
+function handleCandidate(peerId, candidate) {
+    const pc = peers[peerId];
+    if (pc && pc.remoteDescription) {
+        pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error("Error adding IceCandidate:", e));
+    } else {
+        if (!candidateQueues[peerId]) candidateQueues[peerId] = [];
+        candidateQueues[peerId].push(candidate);
+        console.log(`Queued candidate from ${peerId}`);
+    }
+}
+
+function processCandidateQueue(peerId) {
+    const pc = peers[peerId];
+    const queue = candidateQueues[peerId];
+    if (pc && pc.remoteDescription && queue) {
+        console.log(`Processing ${queue.length} queued candidates for ${peerId}`);
+        while (queue.length > 0) {
+            const cand = queue.shift();
+            pc.addIceCandidate(new RTCIceCandidate(cand)).catch(e => console.error("Error adding queued IceCandidate:", e));
         }
     }
 }
 
-// Helper to boost bitrate in SDP
-function setVideoBitrate(sdp, bitrate) {
-    const lines = sdp.split('\n');
-    let lineIndex = -1;
-    for (let i = 0; i < lines.length; i++) {
-        if (lines[i].indexOf('m=video') === 0) {
-            lineIndex = i;
-            break;
+async function createPeerConnection(peerId) {
+    if (peers[peerId]) return peers[peerId];
+    
+    // Ensure we have a local stream before creating peer connections
+    if (!localStream) {
+        console.log("No localStream found, requesting camera access...");
+        const success = await playVideoFromCamera();
+        if (!success) {
+            console.error("Could not obtain localStream for peer connection");
+            return null;
         }
     }
-    if (lineIndex === -1) return sdp;
 
-    // Add b=AS:bitrate after m=video line
-    lines.splice(lineIndex + 1, 0, `b=AS:${bitrate}`);
-    return lines.join('\n');
+    console.log(`Creating RTCPeerConnection for ${peerId}`);
+    const pc = new RTCPeerConnection(configuration);
+    peers[peerId] = pc;
+
+    localStream.getTracks().forEach(track => {
+        console.log(`Adding track ${track.kind} to ${peerId}`);
+        pc.addTrack(track, localStream);
+    });
+
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            console.log(`Sending ICE candidate to ${peerId}`);
+            ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, targetId: peerId }));
+        }
+    };
+
+    pc.ontrack = (event) => {
+        console.log(`Received remote track from ${peerId}`, event.streams);
+        if (event.streams && event.streams[0]) {
+            let container = document.getElementById(`video-${peerId}`);
+            if (!container) {
+                container = document.createElement('div');
+                container.id = `video-${peerId}`;
+                container.className = 'video-container';
+                
+                const video = document.createElement('video');
+                video.id = `v-stream-${peerId}`;
+                video.autoplay = true;
+                video.playsinline = true;
+                
+                const label = document.createElement('div');
+                label.className = 'label';
+                label.textContent = peerNames[peerId] || `Peer ${peerId.substr(0,4)}`;
+                
+                container.appendChild(video);
+                container.appendChild(label);
+                videoGrid.appendChild(container);
+                console.log(`Created video container for ${peerId}`);
+            }
+            
+            const videoEl = document.getElementById(`v-stream-${peerId}`);
+            if (videoEl.srcObject !== event.streams[0]) {
+                videoEl.srcObject = event.streams[0];
+                console.log(`Attached remote stream to video element for ${peerId}`);
+            }
+        }
+    };
+
+    pc.onconnectionstatechange = () => {
+        console.log(`Connection state with ${peerId}: ${pc.connectionState}`);
+    };
+
+    return pc;
+}
+
+function removePeer(peerId) {
+    if (peers[peerId]) {
+        peers[peerId].close();
+        delete peers[peerId];
+    }
+    delete candidateQueues[peerId];
+    const el = document.getElementById(`video-${peerId}`);
+    if (el) el.remove();
+}
+
+function updateActionButtonUI(active) {
+    const icon = callActionButton.querySelector('.material-icons');
+    callActionButton.classList.toggle('call-start', !active);
+    callActionButton.classList.toggle('call-end', active);
+    icon.textContent = active ? "call_end" : "call";
 }
 
 const muteMicButton = document.getElementById('muteMic');
@@ -162,7 +257,7 @@ let isVideoOff = false;
 muteMicButton.onclick = () => {
     if (localStream) {
         isMuted = !isMuted;
-        localStream.getAudioTracks()[0].enabled = !isMuted;
+        localStream.getAudioTracks().forEach(track => track.enabled = !isMuted);
         muteMicButton.classList.toggle('off', isMuted);
         muteMicButton.querySelector('.material-icons').textContent = isMuted ? 'mic_off' : 'mic';
     }
@@ -171,156 +266,19 @@ muteMicButton.onclick = () => {
 toggleVideoButton.onclick = () => {
     if (localStream) {
         isVideoOff = !isVideoOff;
-        localStream.getVideoTracks()[0].enabled = !isVideoOff;
+        localStream.getVideoTracks().forEach(track => track.enabled = !isVideoOff);
         toggleVideoButton.classList.toggle('off', isVideoOff);
         toggleVideoButton.querySelector('.material-icons').textContent = isVideoOff ? 'videocam_off' : 'videocam';
     }
 };
 
-callActionButton.onclick = async () => {
-    if (!inCall) {
-        startCall();
-    } else {
-        hangUp();
-    }
-};
-
-async function startCall() {
-    console.log('Starting Call...');
-    if (await playVideoFromCamera()) {
-        inCall = true;
-        updateActionButtonUI(true);
-        createPeerConnection();
-        const offer = await peerConnection.createOffer();
-        
-        // Boost bitrate to 2500kbps (2.5Mbps)
-        offer.sdp = setVideoBitrate(offer.sdp, 2500);
-        
-        await peerConnection.setLocalDescription(offer);
-        ws.send(JSON.stringify({ 
-            type: 'offer', 
-            offer: offer, 
-            roomId: currentRoomId 
-        }));
-    }
-}
-
-function updateActionButtonUI(active) {
-    const icon = callActionButton.querySelector('.material-icons');
-    if (active) {
-        callActionButton.classList.remove('call-start');
-        callActionButton.classList.add('call-end');
-        callActionButton.title = "End Call";
-        icon.textContent = "call_end";
-    } else {
-        callActionButton.classList.remove('call-end');
-        callActionButton.classList.add('call-start');
-        callActionButton.title = "Start Call";
-        icon.textContent = "call";
-    }
-}
-
-async function handleOffer(offer) {
-    if (!localStream) {
-        await playVideoFromCamera();
-    }
-    
-    if (!peerConnection) {
-        createPeerConnection();
-    }
-    
-    inCall = true;
-    updateActionButtonUI(true);
-    
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
-    processCandidateQueue();
-
-    const answer = await peerConnection.createAnswer();
-    
-    // Boost bitrate on the answer as well
-    answer.sdp = setVideoBitrate(answer.sdp, 2500);
-    
-    await peerConnection.setLocalDescription(answer);
-    ws.send(JSON.stringify({ 
-        type: 'answer', 
-        answer: answer,
-        roomId: currentRoomId 
-    }));
-}
-
-function handleAnswer(answer) {
-    if (peerConnection) {
-        peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
-        processCandidateQueue();
-    }
-}
-
-function handleCandidate(candidate) {
-    if (peerConnection && peerConnection.remoteDescription) {
-        peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-    } else {
-        candidateQueue.push(candidate);
-    }
-}
-
-function processCandidateQueue() {
-    if (peerConnection && peerConnection.remoteDescription) {
-        while (candidateQueue.length > 0) {
-            const candidate = candidateQueue.shift();
-            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-    }
-}
-
-function createPeerConnection() {
-    peerConnection = new RTCPeerConnection(configuration);
-
-    localStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStream);
-    });
-
-    peerConnection.ontrack = (event) => {
-        if (event.streams && event.streams[0]) {
-            remoteVideo.srcObject = event.streams[0];
-            remoteVideo.className = 'full-screen';
-            localVideo.className = 'floating';
-        }
-    };
-
-    peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-            ws.send(JSON.stringify({ 
-                type: 'candidate', 
-                candidate: event.candidate,
-                roomId: currentRoomId 
-            }));
-        }
-    };
-}
-
 function hangUp() {
-    if (peerConnection) {
-        peerConnection.close();
-        peerConnection = null;
-    }
+    Object.keys(peers).forEach(id => removePeer(id));
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
         localStream = null;
     }
     localVideo.srcObject = null;
-    remoteVideo.srcObject = null;
-    candidateQueue.length = 0;
-    
-    localVideo.className = 'full-screen';
-    remoteVideo.className = 'floating';
-
-    isMuted = false;
-    isVideoOff = false;
-    muteMicButton.classList.remove('off');
-    muteMicButton.querySelector('.material-icons').textContent = 'mic';
-    toggleVideoButton.classList.remove('off');
-    toggleVideoButton.querySelector('.material-icons').textContent = 'videocam';
-    
     inCall = false;
     updateActionButtonUI(false);
 }

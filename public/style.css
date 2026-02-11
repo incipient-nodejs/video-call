@@ -19,6 +19,7 @@ body {
     z-index: 100;
 }
 
+#nameInput,
 #roomInput {
     padding: 8px 12px;
     border-radius: 20px;
@@ -26,6 +27,7 @@ body {
     background: #2c2c2c;
     color: white;
     outline: none;
+    width: 150px;
 }
 
 .join-btn {
@@ -43,11 +45,54 @@ body {
     background: #2e7d32;
 }
 
-.container {
-    position: relative;
+.main-layout {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+    background: #000;
+}
+
+.video-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 10px;
     width: 100%;
     height: 100%;
+    align-content: start;
+}
+
+.video-container {
+    position: relative;
+    background: #1e1e1e;
+    border-radius: 12px;
     overflow: hidden;
+    aspect-ratio: 16 / 9;
+    border: 2px solid #333;
+}
+
+.video-container video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.video-container .label {
+    position: absolute;
+    bottom: 10px;
+    left: 10px;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.video-container.local video {
+    transform: scaleX(-1);
+}
+
+.video-container.local {
+    border-color: #43a047;
 }
 
 video {
