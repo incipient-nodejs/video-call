@@ -24,6 +24,10 @@ video {
     transition: all 0.3s ease;
 }
 
+#localVideo {
+    transform: scaleX(-1);
+}
+
 .full-screen {
     position: absolute;
     top: 0;
