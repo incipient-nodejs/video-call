@@ -12,7 +12,13 @@ const keyPath = "certs/key.pem";
 
 let server;
 
-if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
+const useHttps =
+  fs.existsSync(certPath) &&
+  fs.existsSync(keyPath) &&
+  process.env.NODE_ENV !== "production" &&
+  process.env.FORCE_HTTP !== "true";
+
+if (useHttps) {
   console.log("Loading HTTPS certificates...");
   server = https.createServer(
     {
@@ -23,7 +29,7 @@ if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
   );
   console.log("Starting HTTPS server...");
 } else {
-  console.log("Certificates not found. Starting HTTP server...");
+  console.log("Starting HTTP server (Production/Reverse Proxy mode)...");
   server = http.createServer(app);
 }
 

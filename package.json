@@ -4,8 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "prestart": "mkdir -p certs && [ ! -f certs/key.pem ] && openssl req -nodes -new -x509 -keyout certs/key.pem -out certs/cert.pem -days 365 -subj \"/C=US/ST=Dev/L=Local/O=Dev/OU=Dev/CN=localhost\" || true",
-    "start": "node server.js"
+    "certs": "mkdir -p certs && [ ! -f certs/key.pem ] && openssl req -nodes -new -x509 -keyout certs/key.pem -out certs/cert.pem -days 365 -subj \"/C=US/ST=Dev/L=Local/O=Dev/OU=Dev/CN=localhost\" || true",
+    "start": "npm run certs && node server.js",
+    "dev": "npm run certs && node server.js"
   },
   "keywords": [],
   "author": "",
