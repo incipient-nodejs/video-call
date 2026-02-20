@@ -1,5 +1,5 @@
 # Self-signed certificates
-certs/
+# certs/
 
 # Dependencies
 /node_modules
